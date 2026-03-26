@@ -43,7 +43,7 @@ def create_hand_landmarker(model_path):
     options = HandLandmarkerOptions(
         base_options=BaseOptions(model_asset_path=model_path),
         running_mode=VisionRunningMode.IMAGE,
-        num_hands=2,
+        num_hands=1,
     )
 
     return HandLandmarker.create_from_options(options)
@@ -129,7 +129,7 @@ def main():
     X_train, X_test, y_train, y_test = train_test_split(
         X,
         y_encoded,
-        test_size=0.2,
+        test_size=0.5,
         random_state=42,
     )
 
