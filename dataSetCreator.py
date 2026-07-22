@@ -33,7 +33,9 @@ def get_labels_and_paths(root_dir):
 
 def create_hand_landmarker(model_path):
     if not os.path.exists(model_path):
-        raise FileNotFoundError(f"HandLandmarker model not found at: {model_path}.")
+        raise FileNotFoundError(
+            f"HandLandmarker model not found at: {model_path}."
+        )
 
     BaseOptions = mp.tasks.BaseOptions
     VisionRunningMode = mp.tasks.vision.RunningMode
@@ -43,26 +45,61 @@ def create_hand_landmarker(model_path):
     options = HandLandmarkerOptions(
         base_options=BaseOptions(model_asset_path=model_path),
         running_mode=VisionRunningMode.IMAGE,
-        num_hands=1,
+        num_hands=2,  # <--- ask for up to 2 hands
     )
 
     return HandLandmarker.create_from_options(options)
 
 
-def extract_hand_landmarks_with_tasks(image_bgr, landmarker):
+def extract_two_hand_landmarks(image_bgr, landmarker):
+    """
+    Return a 126-dim vector:
+
+        [left_x0, left_y0, left_z0, ..., left_x20, left_y20, left_z20,
+         right_x0, right_y0, right_z0, ..., right_x20, right_y20, right_z20]
+
+    If a hand is missing, its 63 values are zeros.
+    """
     image_rgb = cv2.cvtColor(image_bgr, cv2.COLOR_BGR2RGB)
     mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=image_rgb)
     detection_result = landmarker.detect(mp_image)
 
+    num_landmarks_per_hand = 21
+    dims_per_landmark = 3
+    hand_feature_len = num_landmarks_per_hand * dims_per_landmark
+
+    # Default zero vectors for "no hand"
+    left_features = np.zeros(hand_feature_len, dtype=np.float32)
+    right_features = np.zeros(hand_feature_len, dtype=np.float32)
+
+    # If nothing detected at all, you can choose to skip this sample
     if not detection_result.hand_landmarks:
         return None
 
-    hand_landmarks = detection_result.hand_landmarks[0]
-    coords = []
-    for lm in hand_landmarks:
-        coords.extend([lm.x, lm.y, lm.z])
+    # Use handedness info to map to left/right slots
+    handedness_list = detection_result.handedness  # list of classifications
+    landmarks_list = detection_result.hand_landmarks
 
-    return np.array(coords, dtype=np.float32)
+    # We'll iterate over each detected hand and fill left/right accordingly
+    for handedness, hand_landmarks in zip(handedness_list, landmarks_list):
+        # handedness[0] is the top classification for this hand
+        category = handedness[0]
+        label = category.category_name.upper()  # "Left"/"Right" or "LEFT"/"RIGHT"
+
+        coords = []
+        for lm in hand_landmarks:
+            coords.extend([lm.x, lm.y, lm.z])
+        coords = np.array(coords, dtype=np.float32)
+
+        if label == "LEFT":
+            left_features = coords
+        elif label == "RIGHT":
+            right_features = coords
+
+    # Concatenate into one 126-length vector
+    two_hand_features = np.concatenate([left_features, right_features], axis=0)
+
+    return two_hand_features
 
 
 def main():
@@ -86,8 +123,9 @@ def main():
             print(f"Warning: could not read image {img_path}, skipping.")
             continue
 
-        features = extract_hand_landmarks_with_tasks(image, landmarker)
+        features = extract_two_hand_landmarks(image, landmarker)
         if features is None:
+            # No hands at all detected in this image
             no_hand_count += 1
             continue
 
@@ -97,9 +135,11 @@ def main():
     landmarker.close()
 
     if not all_features:
-        raise RuntimeError("No hands detected in any image using HandLandmarker.")
+        raise RuntimeError(
+            "No usable two-hand data detected in any image using HandLandmarker."
+        )
 
-    X = np.stack(all_features)
+    X = np.stack(all_features)  # shape: (N, 126)
     raw_labels = np.array(all_labels, dtype=object)
 
     unique_labels = np.unique(raw_labels)
@@ -119,7 +159,6 @@ def main():
     unique_ids, counts = np.unique(y_encoded, return_counts=True)
     print("Counts per class (id):", dict(zip(unique_ids, counts)))
 
-    # save mapping as an array so Pylance is happy
     mapping_array = np.array(
         [[idx, label] for idx, label in id_to_label.items()],
         dtype=object,
