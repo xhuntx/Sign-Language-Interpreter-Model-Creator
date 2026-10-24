@@ -34,5 +34,5 @@ model.fit(
     validation_data=(X_test, y_test),
 )
 
-model.save("sign_numbers_classifier.h5")
-print("Saved model to sign_numbers_classifier.h5")
+model.save("sign_language_classifier.h5")
+print("Saved model to sign_language_classifier.h5")
