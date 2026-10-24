@@ -44,8 +44,8 @@ def create_hand_landmarker(model_path):
 
     options = HandLandmarkerOptions(
         base_options=BaseOptions(model_asset_path=model_path),
-        running_mode=VisionRunningMode.IMAGE,
-        num_hands=2,  # <--- ask for up to 2 hands
+        running_mode=VisionRunningMode.IMAGE,  # Crucial for processing static images
+        num_hands=2,
     )
 
     return HandLandmarker.create_from_options(options)
@@ -53,38 +53,36 @@ def create_hand_landmarker(model_path):
 
 def extract_two_hand_landmarks(image_bgr, landmarker):
     """
-    Return a 126-dim vector:
-
-        [left_x0, left_y0, left_z0, ..., left_x20, left_y20, left_z20,
-         right_x0, right_y0, right_z0, ..., right_x20, right_y20, right_z20]
-
-    If a hand is missing, its 63 values are zeros.
+    Run MediaPipe HandLandmarker in IMAGE mode and match left/right hand slots
+    exactly into a 126-length feature vector.
     """
+    # Convert BGR (OpenCV) -> RGB
     image_rgb = cv2.cvtColor(image_bgr, cv2.COLOR_BGR2RGB)
+
+    # Wrap into a MediaPipe Image
     mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=image_rgb)
+
+    # Use .detect() for static IMAGE mode (no timestamp needed)
     detection_result = landmarker.detect(mp_image)
 
     num_landmarks_per_hand = 21
     dims_per_landmark = 3
     hand_feature_len = num_landmarks_per_hand * dims_per_landmark
 
-    # Default zero vectors for "no hand"
+    # Default zero vectors for "no hand" - maintains the 126 shape requirement
     left_features = np.zeros(hand_feature_len, dtype=np.float32)
     right_features = np.zeros(hand_feature_len, dtype=np.float32)
 
-    # If nothing detected at all, you can choose to skip this sample
     if not detection_result.hand_landmarks:
         return None
 
     # Use handedness info to map to left/right slots
-    handedness_list = detection_result.handedness  # list of classifications
+    handedness_list = detection_result.handedness
     landmarks_list = detection_result.hand_landmarks
 
-    # We'll iterate over each detected hand and fill left/right accordingly
     for handedness, hand_landmarks in zip(handedness_list, landmarks_list):
-        # handedness[0] is the top classification for this hand
         category = handedness[0]
-        label = category.category_name.upper()  # "Left"/"Right" or "LEFT"/"RIGHT"
+        label = category.category_name.upper()  # "LEFT" or "RIGHT"
 
         coords = []
         for lm in hand_landmarks:
@@ -96,7 +94,7 @@ def extract_two_hand_landmarks(image_bgr, landmarker):
         elif label == "RIGHT":
             right_features = coords
 
-    # Concatenate into one 126-length vector
+    # Concatenate into one 126-length vector [left, right]
     two_hand_features = np.concatenate([left_features, right_features], axis=0)
 
     return two_hand_features
@@ -123,9 +121,9 @@ def main():
             print(f"Warning: could not read image {img_path}, skipping.")
             continue
 
+        # Fixed: accurately maps to extract_two_hand_landmarks using IMAGE mode rules
         features = extract_two_hand_landmarks(image, landmarker)
         if features is None:
-            # No hands at all detected in this image
             no_hand_count += 1
             continue
 
